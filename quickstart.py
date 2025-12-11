@@ -24,3 +24,12 @@ def generate_total_column(values: List[Any]):
 def main():
     values = values_from_spreadsheet()
     mines_df = generate_total_column(values)
+    means = mines_df.mean(numeric_only=True)
+    stds = mines_df.std(numeric_only=True)
+    medians = mines_df.median(numeric_only=True)
+    qs1 = mines_df.quantile(q=0.25, axis='rows', numeric_only=True, interpolation='lower')
+    qs3 = mines_df.quantile(q=0.75, axis='rows', numeric_only=True, interpolation='lower')
+    iqrs = qs3 - qs1
+
+if __name__ == "__main__":
+    main()
