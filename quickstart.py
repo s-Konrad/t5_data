@@ -113,12 +113,66 @@ def apply_anomaly_tests(df_dict: Dict[str, pd.DataFrame], summary_df: pd.DataFra
 
         detect_anomalies(df, stats_row)
 
+
+def display_dashboard(df_dict: Dict[str, pd.DataFrame], summary_df: pd.DataFrame):
+    tab_names = list(df_dict.keys())
+
+    tabs = st.tabs(tab_names)
+
+    for tab, mine_name in zip(tabs, tab_names):
+        with tab:
+            st.markdown(f"### 📊 Performance Overview: {mine_name}")
+
+            stats = summary_df.loc[mine_name]
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Mean Output", f"{stats['Mean']:.2f}")
+            with col2:
+                st.metric("Median", f"{stats['Median']:.2f}")
+            with col3:
+                st.metric("Std Dev", f"{stats['StdDev']:.2f}")
+            with col4:
+                st.metric("IQR", f"{stats['IQR']:.2f}")
+
+            st.divider()
+
+            st.markdown("### 📋 Detailed Production Data")
+
+            df = df_dict[mine_name]
+
+            def style_anomalies(row):
+                if row.get('is_anomaly_ANY', False):
+                    return ['background-color: #ffe6e6; color: #990000'] * len(row)
+                return [''] * len(row)
+
+            display_cols = [df.columns[0], df.columns[1], 'is_anomaly_ANY']
+
+            st.dataframe(
+                df.style.apply(style_anomalies, axis=1),
+                use_container_width=True,
+                column_config={
+                    "is_anomaly_ANY": st.column_config.CheckboxColumn(
+                        "Anomaly Detected?",
+                        help="True if any of the 4 statistical tests flagged this row."
+                    )
+                }
+            )
+
+            # Optional: Show a breakdown of which test failed for the anomalies
+            # if df['is_anomaly_ANY'].any():
+            #     with st.expander("⚠️ View Anomaly Details"):
+            #         anomalies = df[df['is_anomaly_ANY']].copy()
+            #         st.write(anomalies)
+
 def main():
     mines_df = get_df_from_spreadsheet()
     df_dict = split_data_into_separate_df(mines_df)
     df_dict['Total'] = generate_total_column(mines_df)
     summary_df = calculate_summary_stats(df_dict)
     apply_anomaly_tests(df_dict, summary_df)
+    display_dashboard(df_dict, summary_df)
 
 if __name__ == "__main__":
     main()
