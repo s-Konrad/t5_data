@@ -7,11 +7,16 @@ import numpy as np
 from scipy import stats
 
 def values_from_spreadsheet() -> List[Any]:
-    service = build("sheets", "v4", developerKey=API_KEY)
-    sheet = service.spreadsheets()
-    sheet_read = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
-    values = sheet_read.get('values', [])
-    return values
+        # Access secrets directly from st.secrets dictionary
+        api_key = st.secrets["API_KEY"]
+        spreadsheet_id = st.secrets["SPREADSHEET_ID"]
+        range_name = st.secrets["RANGE_NAME"]
+
+        service = build("sheets", "v4", developerKey=api_key)
+        sheet = service.spreadsheets()
+        sheet_read = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
+        values = sheet_read.get('values', [])
+        return values
 
 
 def generate_total_column(mines_df: pd.DataFrame) -> pd.DataFrame:
