@@ -4,7 +4,8 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 from scipy import stats
-import plotly.express as px
+import plotly.graph_objects as go
+import generatePDF
 
 def values_from_spreadsheet() -> List[Any]:
         # Access secrets directly from st.secrets dictionary
@@ -123,33 +124,23 @@ def check_grubbs(df: pd.DataFrame, z_scores: pd.Series) -> pd.Series:
     N = len(df)
     alpha = 0.05
 
-    # Calculate Critical G Value
     t_crit = stats.t.ppf(1 - alpha / (2 * N), N - 2)
     g_critical = ((N - 1) * np.sqrt(np.square(t_crit))) / (np.sqrt(N) * np.sqrt(N - 2 + np.square(t_crit)))
 
     return z_scores.abs() > g_critical
 
 def detect_anomalies(df: pd.DataFrame, stats_row: pd.Series, params: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Orchestrates the anomaly detection by calling individual test functions.
-    """
-    # 1. Run IQR Test
     df['is_anomaly_IQR'] = check_iqr(df, stats_row, params)
 
-    # 2. Run Z-Score Test (We get the column AND the flags back)
     df['z_score'], df['is_anomaly_Zscore'] = check_zscore(df, stats_row, params)
 
-    # 3. Run Moving Average Test
     df['is_anomaly_MA'] = check_moving_average(df, params)
 
-    # 4. Run Grubbs' Test (Re-uses the Z-scores we just calculated)
-    # We guard against empty dataframes or zero variance
     if len(df) > 2 and stats_row['StdDev'] > 0:
         df['is_anomaly_Grubbs'] = check_grubbs(df, df['z_score'])
     else:
         df['is_anomaly_Grubbs'] = False
 
-    # 5. Summary Column
     df['is_anomaly_ANY'] = (
         df['is_anomaly_IQR'] |
         df['is_anomaly_Zscore'] |
@@ -166,50 +157,66 @@ def apply_anomaly_tests(df_dict: Dict[str, pd.DataFrame], summary_df: pd.DataFra
         detect_anomalies(df, stats_row, params)
 
 
-def render_graph(df: pd.DataFrame, mine_name: str, graph_type: str):
+def render_graph(df: pd.DataFrame, mine_name: str, graph_type: str, poly_degree: int):
     """
-    Renders a Plotly graph based on the user's selection.
-    Highlights anomalies in Red.
+    Renders a Plotly graph with:
+    1. User-selected chart type (Line, Bar, Area)
+    2. Optional Polynomial Trendline (Degree 1-4)
+    3. Anomalies highlighted in Red
     """
-    # Prepare data for plotting
-    # We create a new 'Color' column to define the legend colors dynamically
-    plot_df = df.copy()
-    plot_df['Status'] = plot_df['is_anomaly_ANY'].apply(lambda x: 'Anomaly' if x else 'Normal')
+    fig = go.Figure()
 
-    # Define color map: Normal = Blue/Grey, Anomaly = Red
-    color_map = {'Normal': '#636EFA', 'Anomaly': '#EF553B'}
+    x_data = df[df.columns[0]]  # Dates
+    y_data = df[df.columns[1]]  # Values
 
-    # 1. Line Chart
     if graph_type == "Line Chart":
-        # We use a scatter plot with lines to allow marker coloring for anomalies
-        fig = px.line(plot_df, x=plot_df.columns[0], y=plot_df.columns[1], title=f"{mine_name} Production Trend")
-        # Add red markers for anomalies
-        anomalies = plot_df[plot_df['is_anomaly_ANY']]
-        fig.add_scatter(x=anomalies.iloc[:, 0], y=anomalies.iloc[:, 1], mode='markers',
-                        marker=dict(color='red', size=10), name='Anomaly')
-
-    # 2. Bar Chart (Separate)
+        fig.add_trace(go.Scatter(x=x_data, y=y_data, mode='lines', name='Production', line=dict(color='#636EFA')))
     elif graph_type == "Bar Chart":
-        fig = px.bar(plot_df, x=plot_df.columns[0], y=plot_df.columns[1],
-                     color='Status', color_discrete_map=color_map,
-                     title=f"{mine_name} Daily Output")
+        # We color the bars individually based on anomaly status
+        colors = ['#EF553B' if is_anom else '#636EFA' for is_anom in df['is_anomaly_ANY']]
+        fig.add_trace(go.Bar(x=x_data, y=y_data, name='Production', marker_color=colors))
+    elif graph_type == "Area / Stacked":
+        fig.add_trace(go.Scatter(x=x_data, y=y_data, fill='tozeroy', name='Production', line=dict(color='#636EFA')))
 
-    # 3. Bar Chart (Stacked) / Area
-    # For a single mine, "Stacked" acts like an Area chart or a full bar.
-    # We will use an Area Chart here as it is the closest "filled" equivalent
-    # to a stacked chart for a single time series.
-    else:
-        fig = px.area(plot_df, x=plot_df.columns[0], y=plot_df.columns[1],
-                      title=f"{mine_name} Cumulative View")
-        # We can still highlight points if needed, but Area is usually for trends
+    if poly_degree is not None:
+        clean_df = df.dropna(subset=[df.columns[1]])
+        x_numeric = pd.to_datetime(clean_df[df.columns[0]]).map(pd.Timestamp.toordinal)
+        y_numeric = clean_df[df.columns[1]]
 
-    # Update layout for professional look
-    fig.update_layout(xaxis_title="Date", yaxis_title="Production Output", hovermode="x unified")
+        z = np.polyfit(x_numeric, y_numeric, poly_degree)
+        p = np.poly1d(z)
+
+        trend_y = p(x_numeric)
+
+        fig.add_trace(go.Scatter(
+            x=clean_df[df.columns[0]],
+            y=trend_y,
+            mode='lines',
+            name=f'Trendline (Deg {poly_degree})',
+            line=dict(color='orange', width=3, dash='dash')
+        ))
+
+    anomalies = df[df['is_anomaly_ANY']]
+    if not anomalies.empty:
+        fig.add_trace(go.Scatter(
+            x=anomalies[df.columns[0]],
+            y=anomalies[df.columns[1]],
+            mode='markers',
+            name='Anomaly',
+            marker=dict(color='red', size=10, symbol='circle-open', line=dict(width=2))
+        ))
+
+    fig.update_layout(
+        title=f"{mine_name} Production Analysis",
+        xaxis_title="Date",
+        yaxis_title="Output",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
 
     st.plotly_chart(fig, use_container_width=True)
 
 def render_metrics(stats: pd.Series, mine_name: str):
-    """Renders the professional statistics display using st.metric."""
     st.markdown(f"### 📊 Performance Overview: {mine_name}")
 
     col1, col2, col3, col4 = st.columns(4)
@@ -225,19 +232,36 @@ def render_metrics(stats: pd.Series, mine_name: str):
 
 
 def render_chart_tab(df: pd.DataFrame, mine_name: str):
-    """Renders the graph selection and the selected Plotly chart."""
     st.markdown("### 📈 Production Visualizations")
 
-    # Graph Type Selector (Unique key for each tab)
-    graph_type = st.radio(
-        "Choose Graph Style:",
-        ["Line Chart", "Bar Chart", "Area / Stacked"],
-        horizontal=True,
-        key=f"graph_select_{mine_name}"
-    )
+    # Create two columns for controls to keep UI compact
+    col_ctrl1, col_ctrl2 = st.columns([1, 1])
 
-    # The render_graph function itself (from the previous step) is called here
-    render_graph(df, mine_name, graph_type)
+    with col_ctrl1:
+        # Chart Type Selector
+        graph_type = st.selectbox(
+            "Choose Graph Style:",
+            ["Line Chart", "Bar Chart", "Area / Stacked"],
+            key=f"graph_type_{mine_name}"
+        )
+
+    with col_ctrl2:
+        poly_choice = st.selectbox(
+            "Trendline Complexity:",
+            ["None", "Linear (1)", "Quadratic (2)", "Cubic (3)", "Quartic (4)"],
+            key=f"poly_{mine_name}"
+        )
+
+    degree_map = {
+        "None": None,
+        "Linear (1)": 1,
+        "Quadratic (2)": 2,
+        "Cubic (3)": 3,
+        "Quartic (4)": 4
+    }
+    selected_degree = degree_map[poly_choice]
+
+    render_graph(df, mine_name, graph_type, selected_degree)
 
 
 def render_data_table(df: pd.DataFrame):
@@ -261,48 +285,63 @@ def render_data_table(df: pd.DataFrame):
         }
     )
 
-    def display_dashboard(df_dict: Dict[str, pd.DataFrame], summary_df: pd.DataFrame):
-        """
-        Orchestrates the entire dashboard display using Streamlit tabs and helper functions.
-        """
-        tab_names = list(df_dict.keys())
-        tabs = st.tabs(tab_names)
+def display_dashboard(df_dict: Dict[str, pd.DataFrame], summary_df: pd.DataFrame):
+    tab_names = list(df_dict.keys())
+    tabs = st.tabs(tab_names)
 
-        for tab, mine_name in zip(tabs, tab_names):
-            with tab:
-                # 1. Get the data for the current tab
-                df = df_dict[mine_name]
-                stats = summary_df.loc[mine_name]
+    for tab, mine_name in zip(tabs, tab_names):
+        with tab:
+            # 1. Get the data for the current tab
+            df = df_dict[mine_name]
+            stats = summary_df.loc[mine_name]
 
-                # 2. Render the professional metrics
-                render_metrics(stats, mine_name)
+            # 2. Render the professional metrics
+            render_metrics(stats, mine_name)
 
-                st.divider()
+            st.divider()
 
-                # 3. Render the interactive chart
-                render_chart_tab(df, mine_name)
+            # 3. Render the interactive chart
+            render_chart_tab(df, mine_name)
 
-                st.divider()
+            st.divider()
 
-                # 4. Render the detailed data table
-                render_data_table(df)
+            # 4. Render the detailed data table
+            render_data_table(df)
 
-    # Note: The rest of your main function (loading, calculating, calling this function) remains the same.
-
-    # Optional: Show a breakdown of which test failed for the anomalies
-    if df['is_anomaly_ANY'].any():
-        with st.expander("⚠️ View Anomaly Detection Details"):
-            # Display only the anomalous rows with all diagnostic columns
-            anomalies = df[df['is_anomaly_ANY']].copy()
-            st.dataframe(anomalies)
 
 def main():
-    st.set_page_config(page_title="Mine Production Dashboard", layout="wide")
+    params = prepare_streamlit()
+    mines_df = get_df_from_spreadsheet()
+    df_dict = split_data_into_separate_df(mines_df)
+    df_dict['Total'] = generate_total_column(mines_df)
+    summary_df = calculate_summary_stats(df_dict)
+    apply_anomaly_tests(df_dict, summary_df, params)
+    display_dashboard(df_dict, summary_df)
+    pdf_generator(df_dict, summary_df)
 
-    # --- 1. Sidebar: Define the Parameters ---
+def pdf_generator(df_dict: Dict[str, pd.DataFrame], summary_df: pd.DataFrame):
+    st.divider()
+    st.header("📄 Download Report")
+
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("Generate PDF Report"):
+            with st.spinner("Generating detailed PDF report..."):
+                # Call the function we just created
+                pdf_bytes = generatePDF.create_pdf_report(df_dict, summary_df)
+
+                st.download_button(
+                    label="📥 Click to Download PDF",
+                    data=pdf_bytes,
+                    file_name="mine_production_report.pdf",
+                    mime="application/pdf"
+                )
+
+
+def prepare_streamlit():
+    st.set_page_config(page_title="Mine Production Dashboard", layout="wide")
     st.sidebar.header("⚙️ Anomaly Settings")
     st.sidebar.write("Adjust test sensitivity below:")
-
     # This dictionary packages all your settings to send to the functions
     params = {
         'iqr_factor': st.sidebar.slider(
@@ -322,16 +361,12 @@ def main():
         ),
         'ma_threshold': st.sidebar.slider(
             "Moving Average % Deviation",
-            min_value=0.05, max_value=1.0, value=0.20, step=0.05,
+            min_value=0.05, max_value=1.0, value=0.30, step=0.05,
             help="Flags if value deviates by X% from the moving average."
         )
     }
-    mines_df = get_df_from_spreadsheet()
-    df_dict = split_data_into_separate_df(mines_df)
-    df_dict['Total'] = generate_total_column(mines_df)
-    summary_df = calculate_summary_stats(df_dict)
-    apply_anomaly_tests(df_dict, summary_df, params)
-    display_dashboard(df_dict, summary_df)
+    return params
+
 
 if __name__ == "__main__":
     main()
