@@ -1,5 +1,4 @@
 from typing import *
-from config import API_KEY, SPREADSHEET_ID, RANGE_NAME, SCOPES
 from googleapiclient.discovery import build
 import pandas as pd
 import streamlit as st
