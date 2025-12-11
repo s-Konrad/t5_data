@@ -14,7 +14,7 @@ def values_from_spreadsheet() -> List[Any]:
 
 
 def generate_total_column(mines_df: pd.DataFrame) -> pd.DataFrame:
-    total_df = mines_df[mines_df.columns[0]]
+    total_df = pd.DataFrame(mines_df[mines_df.columns[0]])
     total_df['Total'] = 0
     for col in mines_df.columns[1:]:
         mines_df[col] = pd.to_numeric(mines_df[col], errors='coerce')
@@ -31,22 +31,46 @@ def split_data_into_separate_df(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     df_dict = {}
     for col in df.columns[1:]:
         sub_df = pd.DataFrame(df[date_column])
-        sub_df[col] = df[col]
+        sub_df[col] = pd.to_numeric(df[col], errors='coerce')
         df_dict[col] = sub_df
     return df_dict
+
+def basic_tests_per_df(df: pd.DataFrame) -> None:
+    pass
+
+
+def calculate_summary_stats(df_dict: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    stats_list = []
+
+    for name, df in df_dict.items():
+        value_col = df.columns[1]
+        series = df[value_col]
+
+        mean = series.mean()
+        median = series.median()
+        std = series.std()
+        q1 = series.quantile(0.25)
+        q3 = series.quantile(0.75)
+        iqr = q3 - q1
+
+        stats_list.append({
+            'Mine': name,
+            'Mean': mean,
+            'Median': median,
+            'StdDev': std,
+            'IQR': iqr
+        })
+
+    summary_df = pd.DataFrame(stats_list)
+    summary_df.set_index('Mine', inplace=True)
+
+    return summary_df
 
 def main():
     mines_df = get_df_from_spreadsheet()
     df_dict = split_data_into_separate_df(mines_df)
     df_dict['Total'] = generate_total_column(mines_df)
-
-    means = mines_df.mean(numeric_only=True)
-    stds = mines_df.std(numeric_only=True)
-    medians = mines_df.median(numeric_only=True)
-    qs1 = mines_df.quantile(q=0.25, axis='rows', numeric_only=True, interpolation='lower')
-    qs3 = mines_df.quantile(q=0.75, axis='rows', numeric_only=True, interpolation='lower')
-    iqrs = qs3 - qs1
-
+    summary_df = calculate_summary_stats(df_dict)
 
 if __name__ == "__main__":
     main()
